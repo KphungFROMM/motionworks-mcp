@@ -1,0 +1,32 @@
+# Python bytecode and build residue
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Test and tooling caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini
+
+# Staged project copies produced by the write tools and the acceptance probe.
+# These are real MotionWorks projects and never belong in the repository.
+*__staged-*/
+*__staged-*.mwt
+*__baseline/
+*__baseline.mwt
+*__backup/

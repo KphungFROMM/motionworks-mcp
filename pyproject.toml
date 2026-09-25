@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "motionworks-mcp"
+version = "0.1.0"
+description = "Read-first MCP server for Yaskawa MotionWorks IEC 3 Pro projects"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "AryaAI" }]
+keywords = ["motionworks", "iec61131-3", "yaskawa", "mcp", "plc"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Embedded Systems",
+]
+# Standard library only, deliberately: the server must start on any machine that
+# has a Python, with no resolution step between the user and a working tool.
+dependencies = []
+
+[project.scripts]
+motionworks-mcp = "motionworks_mcp.server:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
