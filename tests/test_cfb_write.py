@@ -41,6 +41,140 @@ def container(topcutter: Path, tmp_path: Path) -> Path:
     return work / "src.st1"
 
 
+def _strict_read(path: Path) -> dict[str, bytes]:
+    """Read a CFB container the way the specification says to, not via our reader.
+
+    The header's `number of FAT sectors` field is authoritative: read exactly that
+    many FAT sector numbers from the DIFAT and no more. A writer that adds FAT
+    sectors without updating the field leaves every sector beyond them unreachable,
+    and a reader that walks the DIFAT instead of the count cannot see the mistake.
+    """
+    import struct
+
+    data = path.read_bytes()
+    assert data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "signature"
+    sector_size = 1 << struct.unpack_from("<H", data, 30)[0]
+    mini_size = 1 << struct.unpack_from("<H", data, 32)[0]
+    fat_count = struct.unpack_from("<I", data, 44)[0]
+    directory_start = struct.unpack_from("<I", data, 48)[0]
+    cutoff = struct.unpack_from("<I", data, 56)[0]
+    minifat_start = struct.unpack_from("<I", data, 60)[0]
+    minifat_count = struct.unpack_from("<I", data, 64)[0]
+
+    difat = [struct.unpack_from("<I", data, 76 + index * 4)[0] for index in range(109)]
+    fat_sector_ids = [value for value in difat if value != 0xFFFFFFFF]
+    assert len(fat_sector_ids) >= fat_count, (
+        f"header declares {fat_count} FAT sectors but the DIFAT names {len(fat_sector_ids)}"
+    )
+    fat_sector_ids = fat_sector_ids[:fat_count]
+
+    fat: list[int] = []
+    for sector in fat_sector_ids:
+        offset = 512 + sector * sector_size
+        fat.extend(struct.unpack_from(f"<{sector_size // 4}I", data, offset))
+
+    def sector(index: int) -> bytes:
+        offset = 512 + index * sector_size
+        return data[offset : offset + sector_size]
+
+    def chain(start: int) -> list[int]:
+        out: list[int] = []
+        current = start
+        while current not in (0xFFFFFFFE, 0xFFFFFFFF) and current < len(fat):
+            out.append(current)
+            current = fat[current]
+        return out
+
+    entries: dict[str, tuple[int, int, int]] = {}
+    directory_bytes = b"".join(sector(index) for index in chain(directory_start))
+    for offset in range(0, len(directory_bytes) - 127, 128):
+        name_len = struct.unpack_from("<H", directory_bytes, offset + 64)[0]
+        if name_len <= 2 or name_len > 128:
+            continue
+        name = directory_bytes[offset : offset + name_len - 2].decode("utf-16-le", "replace")
+        entries[name] = (
+            directory_bytes[offset + 66],
+            struct.unpack_from("<I", directory_bytes, offset + 116)[0],
+            struct.unpack_from("<I", directory_bytes, offset + 120)[0],
+        )
+
+    root = next((value for value in entries.values() if value[0] == 5), None)
+    assert root is not None
+    mini_stream = b"".join(sector(index) for index in chain(root[1]))
+    minifat: list[int] = []
+    for index in chain(minifat_start):
+        minifat.extend(struct.unpack_from(f"<{sector_size // 4}I", sector(index)))
+    assert len(minifat) >= minifat_count, "the mini FAT is shorter than the header says"
+
+    out: dict[str, bytes] = {}
+    for name, (obj_type, start, size) in entries.items():
+        if obj_type != 2 or size == 0:
+            continue
+        if size < cutoff:
+            buf = bytearray()
+            current = start
+            while current not in (0xFFFFFFFE, 0xFFFFFFFF) and current < len(minifat):
+                buf += mini_stream[current * mini_size : (current + 1) * mini_size]
+                current = minifat[current]
+            out[name] = bytes(buf[:size])
+        else:
+            out[name] = b"".join(sector(index) for index in chain(start))[:size]
+    return out
+
+
+def test_the_header_names_exactly_as_many_fat_sectors_as_the_difat(container: Path) -> None:
+    """The field that decides how much of the container is reachable.
+
+    Adding a FAT sector without updating `number of FAT sectors` leaves every sector
+    beyond the declared ones unreachable: stream payloads stored there read as
+    absent, and MotionWorks reported `File error` against a build stream it could no
+    longer locate. Our own reader walks the DIFAT and cannot see this.
+    """
+    import struct
+
+    for size in (100, 60000, 200000):
+        writer = CompoundWriter(container)
+        writer.replace_stream("TopCutterCutControl.STB", b"z" * size)
+        writer.save()
+        data = container.read_bytes()
+        fat_count = struct.unpack_from("<I", data, 44)[0]
+        difat = [struct.unpack_from("<I", data, 76 + i * 4)[0] for i in range(109)]
+        named = [value for value in difat if value != 0xFFFFFFFF]
+        assert fat_count == len(named), f"size {size}: header {fat_count} vs DIFAT {len(named)}"
+
+
+def test_a_spec_strict_reader_sees_every_stream_after_a_growth(container: Path) -> None:
+    """Read through the declared header fields only, as another implementation would."""
+    for size in (200, 200000):
+        payload = bytes([65 + (size % 26)]) * size
+        writer = CompoundWriter(container)
+        writer.replace_stream("TopCutterCutControl.STB", payload)
+        writer.save()
+
+        strict = _strict_read(container)
+        ours = CompoundFile(container)
+        # a zero-length stream has nothing to read and is legitimately absent
+        expected = {name for name in ours.stream_names() if len(ours.read_stream(name)) > 0}
+        assert set(strict) == expected, f"size {size}: stream sets differ"
+        for name in strict:
+            assert strict[name] == ours.read_stream(name), f"size {size}: {name} differs"
+        assert strict["TopCutterCutControl.STB"] == payload, f"size {size}"
+
+
+def test_the_reported_fat_capacity_matches_the_header(container: Path) -> None:
+    """Capacity is derived from the declared count, not from the DIFAT's length."""
+    import struct
+
+    writer = CompoundWriter(container)
+    writer.replace_stream("TopCutterCutControl.STB", b"q" * 150000)
+    writer.save()
+    data = container.read_bytes()
+    sector_size = 1 << struct.unpack_from("<H", data, 30)[0]
+    fat_count = struct.unpack_from("<I", data, 44)[0]
+    reader = CompoundFile(container)
+    assert len(reader.fat) >= fat_count * (sector_size // 4)
+
+
 def test_every_size_transition_writes_and_reads_back(container: Path) -> None:
     """Growth, shrinkage and crossings of the cutoff all round-trip."""
     original = CompoundFile(container)

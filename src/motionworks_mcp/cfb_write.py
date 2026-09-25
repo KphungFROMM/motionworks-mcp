@@ -364,7 +364,15 @@ class CompoundWriter:
         struct.pack_into("<I", self.data, offset + 120, size & 0xFFFFFFFF)
 
     def _flush_fat(self) -> None:
-        """Write the in-memory FAT and its DIFAT, unsigned throughout."""
+        """Write the in-memory FAT, its DIFAT, and the header counts that describe them.
+
+        The header's `number of FAT sectors` field must match the DIFAT, not just the
+        first entry. A reader that trusts the field — which is how the format is meant
+        to be read — stops after the sectors it names, so every sector allocated
+        beyond them is invisible and the streams stored there read as absent. Leaving
+        this field at its original value is what made a grown container fail with
+        `File error`, naming a build stream whose bytes could no longer be located.
+        """
         per = self.per_fat
         for position, sector in enumerate(self.fat_sectors):
             chunk = self.fat[position * per : (position + 1) * per]
@@ -373,9 +381,21 @@ class CompoundWriter:
             self.data[offset : offset + self.sector_size] = struct.pack(
                 f"<{per}I", *[value & 0xFFFFFFFF for value in chunk]
             )
+
+        # DIFAT: one entry per FAT sector, then FREE for the unused header slots.
         for index in range(DIFAT_HEADER_SLOTS):
-            value = self.fat_sectors[index] if index < len(self.fat_sectors) else 0xFFFFFFFF
+            value = self.fat_sectors[index] if index < len(self.fat_sectors) else FREESECT
             struct.pack_into("<I", self.data, 76 + index * 4, value & 0xFFFFFFFF)
+
+        struct.pack_into("<I", self.data, 44, len(self.fat_sectors) & 0xFFFFFFFF)
+        mini = (
+            self.reader.chain(self.reader.minifat_start)
+            if self.reader.minifat_start >= 0
+            else []
+        )
+        if mini:
+            struct.pack_into("<I", self.data, 60, mini[0] & 0xFFFFFFFF)
+            struct.pack_into("<I", self.data, 64, len(mini) & 0xFFFFFFFF)
 
     def _flush_minifat(self) -> None:
         sectors = (
