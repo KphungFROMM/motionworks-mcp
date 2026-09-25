@@ -164,6 +164,52 @@ def test_a_staged_body_write_leaves_the_project_alone(server: StdioServer, topcu
     staged.with_suffix(".mwt").unlink(missing_ok=True)
 
 
+def test_a_write_clears_the_generated_build_cache(server: StdioServer, topcutter: Path) -> None:
+    """`tmp.sto` describes the POU as it was before the write.
+
+    Left in place, a Rebuild can read it and abort with a file error naming a stream
+    this code never wrote. Observed on a real build: the IDE reported
+    `File error: (POE\\TopCutterCutControl\\TopCutterCutControlV.vbc)` and left
+    `tmp.sto` truncated with the `.vbc` stream missing.
+    """
+    cache = topcutter / "POE" / "TopCutterCutControl" / "tmp.sto"
+    if not cache.is_file():
+        pytest.skip("this project has no build cache for the POU")
+
+    before = cache.read_bytes()
+    payload = call(
+        server,
+        "mw_write_pou_body",
+        {"project": str(topcutter), "pou": "TopCutterCutControl", "st": "(* cache check *)\r\n"},
+    )
+    assert payload["ok"] is True
+    staged = Path(payload["data"]["project"])
+
+    staged_cache = staged / "POE" / "TopCutterCutControl" / "tmp.sto"
+    assert not staged_cache.exists(), "the stale build cache must not survive a write"
+    assert cache.read_bytes() == before, "the source project's cache is untouched"
+
+    cleared = [w for w in payload["warnings"] if w["code"] == "build_cache_cleared"]
+    assert cleared, "clearing the cache is reported"
+    assert any("tmp.sto" in name for name in payload["meta"]["files_changed"])
+
+    shutil.rmtree(staged, ignore_errors=True)
+    staged.with_suffix(".mwt").unlink(missing_ok=True)
+
+
+def test_a_write_without_a_cache_still_succeeds(server: StdioServer, topcutter: Path) -> None:
+    """A POU with no build cache is not an error; there is simply nothing to clear."""
+    payload = call(
+        server,
+        "mw_write_pou_body",
+        {"project": str(topcutter), "pou": "TopCutterInitialize", "st": "(* no cache here *)\r\n"},
+    )
+    assert payload["ok"] is True
+    staged = Path(payload["data"]["project"])
+    shutil.rmtree(staged, ignore_errors=True)
+    staged.with_suffix(".mwt").unlink(missing_ok=True)
+
+
 def test_write_records_its_evidence_level(server: StdioServer, topcutter: Path) -> None:
     """Every write states what is known about IDE acceptance for that shape.
 

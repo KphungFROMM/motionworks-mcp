@@ -180,6 +180,10 @@ class CompoundWriter:
     def replace_stream(self, name: str, payload: bytes) -> None:
         """Replace one stream's payload, growing the container when it must.
 
+        Which allocation applies is decided by the *payload's* size, never by the
+        entry's recorded size. Deciding from the entry makes the two writers delegate
+        to each other when a large stream is replaced by a small one.
+
         Raises:
             KeyError: no stream by that name. Streams are replaced, not created,
                 because adding one means adding a directory entry.
@@ -192,10 +196,25 @@ class CompoundWriter:
         else:
             self._write_large_stream(entry, payload)
 
+    def _release_large_chain(self, entry: DirEntry) -> None:
+        """Free the sectors a large entry currently occupies.
+
+        An entry whose recorded size is at or above the cutoff is backed by a FAT
+        chain; one below it is backed by the mini stream. Reading the wrong one
+        walks unrelated entries.
+        """
+        if entry.size >= self.mini_cutoff and entry.start_sector >= 0:
+            for sector in self.reader.chain(entry.start_sector):
+                self._set_fat(sector, FREESECT)
+
     def _write_large_stream(self, entry: DirEntry, payload: bytes) -> None:
+        """Give the payload its own FAT chain, reusing the entry's sectors if any."""
         sectors_needed = max(1, -(-len(payload) // self.sector_size))
+        # A mini-backed entry owns no FAT sectors, so there is nothing to reuse.
         existing = (
-            list(self.reader.chain(entry.start_sector)) if entry.size >= self.mini_cutoff else []
+            list(self.reader.chain(entry.start_sector))
+            if entry.size >= self.mini_cutoff
+            else []
         )
         reusable = existing[:sectors_needed]
         chain = list(reusable)
@@ -215,17 +234,20 @@ class CompoundWriter:
         self._set_directory_entry(entry.index, chain[0], len(payload))
 
     def _write_small_stream(self, entry: DirEntry, payload: bytes) -> None:
-        """Write a payload that belongs in the mini stream.
+        """Give the payload mini sectors, reusing the entry's chain if it had one.
 
-        A payload that outgrows the mini-stream cutoff is promoted to its own
-        normal chain instead, which is what the format expects and what the reader
-        already understands.
+        An entry that currently holds a large payload has no mini chain, so its FAT
+        sectors are released and it is given fresh mini sectors. Allocating by any
+        other rule lets the directory pointer and the bytes disagree, which reads
+        back as the right length and the wrong content.
         """
-        if entry.size >= self.mini_cutoff:
-            self._write_large_stream(entry, payload)
-            return
         mini_sectors = max(1, -(-len(payload) // self.mini_sector_size))
-        existing = self._mini_chain(entry.start_sector)
+        total = self._mini_sector_total()
+        if entry.size < self.mini_cutoff and self._is_mini_index(entry.start_sector, total):
+            existing = self._mini_chain(entry.start_sector)
+        else:
+            self._release_large_chain(entry)
+            existing = []
         chain = existing[:mini_sectors]
         if len(chain) < mini_sectors:
             chain.extend(self._allocate_mini_sectors(mini_sectors - len(chain)))
@@ -250,14 +272,30 @@ class CompoundWriter:
     def _mini_sector_total(self) -> int:
         """Mini sectors the container actually has.
 
-        The mini stream is the root entry's own stream, so its size fixes the
-        count. Deriving the total from the mini FAT's length instead over-counts,
-        because the FAT sector is usually wider than the stream it describes.
+        The mini stream is the root entry's own stream, and how much of it exists is
+        the root chain's length in mini sectors. The root's declared *size* is not
+        usable for this: real containers were observed with `size=0` while their
+        chain held seven sectors, which made the count collapse to zero and the free
+        list come back empty.
         """
         root = next((item for item in self.reader.entries if item.is_root), None)
-        if root is None:
-            return 0
-        return max(0, root.size // self.mini_sector_size)
+        if root is None or root.start_sector < 0:
+            return len(self.ministream) // self.mini_sector_size
+        root_sectors = len(self.reader.chain(root.start_sector))
+        if root_sectors == 0:
+            return len(self.ministream) // self.mini_sector_size
+        return max(1, (root_sectors * self.sector_size) // self.mini_sector_size)
+
+    @staticmethod
+    def _is_mini_index(value: int, total: int) -> bool:
+        """Whether a directory entry's start field is a mini-sector index.
+
+        A mini index is small and bounded by the number of mini sectors; a FAT
+        sector index is not. This is what keeps a large entry's sector index from
+        being read as a mini index, which silently points a directory entry at
+        unrelated bytes.
+        """
+        return 0 <= value < total
 
     def _mini_chain(self, start: int) -> list[int]:
         out: list[int] = []
@@ -275,18 +313,26 @@ class CompoundWriter:
         self.minifat[sector] = value & 0xFFFFFFFF
 
     def _allocate_mini_sectors(self, count: int) -> list[int]:
-        """Reuse free mini sectors, growing the root stream when there are none."""
+        """Reuse free mini sectors, growing the root stream when there are none.
+
+        The free list spans the mini sectors the root chain actually backs, which is
+        the same total :meth:`_mini_sector_total` reports and the same range
+        :meth:`_flush_ministream` writes back. Deriving any of the three differently
+        lets the allocation and the directory pointer disagree.
+        """
         used: set[int] = set()
         for entry in self.reader.entries:
             if entry.is_stream and 0 < entry.size < self.mini_cutoff:
-                used.update(self._mini_chain(entry.start_sector))
+                total = self._mini_sector_total()
+                if self._is_mini_index(entry.start_sector, total):
+                    used.update(self._mini_chain(entry.start_sector))
         free = [
             sector for sector in range(self._mini_sector_total()) if sector not in used
         ]
         if len(free) >= count:
             return free[:count]
 
-        taken = free
+        taken = list(free)
         remaining = count - len(free)
         extra_root = max(1, -(-(remaining * self.mini_sector_size) // self.sector_size))
         chain = self.append_sectors(extra_root)
