@@ -46,6 +46,23 @@ IEC_STANDARD_BLOCKS = {
     "SEMA", "RTC",
 }
 
+# What is known about whether MotionWorks IEC accepts a container this code writes.
+# Recorded evidence, not a policy: an unrun variant is reported as unverified rather
+# than presumed, and an accepted one is reported as accepted rather than hedged.
+WRITE_VERIFICATION_ACCEPTED = "accepted"
+WRITE_VERIFICATION_UNVERIFIED = "unverified"
+
+WRITE_VERIFICATION_EVIDENCE = {
+    WRITE_VERIFICATION_ACCEPTED: (
+        "a container written by this code was opened, Rebuild Project'd and Make'd in "
+        "MotionWorks IEC 3 Pro 3.7.5.1 with no errors (2026-09-25)"
+    ),
+    WRITE_VERIFICATION_UNVERIFIED: (
+        "this write shape has not been through MotionWorks IEC; the container reads back "
+        "byte-identical, but IDE acceptance is not yet observed"
+    ),
+}
+
 
 def discover_ironplc() -> str | None:
     """Path to the IronPLC CLI, or ``None`` when it is not installed.

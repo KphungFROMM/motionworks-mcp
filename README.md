@@ -110,19 +110,32 @@ a writer that cannot grow it. This one appends FAT sectors, links them, marks th
 `FATSECT` and extends the DIFAT. Verified against the two largest POUs in the corpus,
 whose bodies are past that boundary.
 
-**`write_verification: unverified`.** Whether MotionWorks IEC reopens a container this
-code writes has **not** been confirmed. Every write result carries that status and the
-steps that settle it. It is a status, not a gate — the operation runs.
+**`write_verification` says what is known, not what we hope.** Every write result carries a
+level and the evidence behind it:
 
-To settle it, run the acceptance probe on a machine with the IDE:
+| Level | Means |
+|---|---|
+| `accepted` | a container written by this code was opened, **Rebuild Project**'d and **Make**'d in MotionWorks IEC 3 Pro 3.7.5.1 with no errors |
+| `unverified` | this write shape has not been through the IDE; the container reads back byte-identical, and that is all that is claimed |
+
+A write that reuses existing sectors is `accepted`. One that had to add FAT sectors is
+`unverified` until that variant has been run the same way — the same code path plus FAT
+allocation, but more of the container changes, so it is recorded rather than presumed.
+
+The control that makes the `accepted` result trustworthy: a byte-identical copy of the same
+project was built first and **also built clean**, with every declared library resolving. The
+environment was proven before the write was added.
+
+Neither level withholds the attempt. An unverified shape runs, and says so.
+
+To settle a new shape, run the acceptance probe on a machine with the IDE:
 
 ```sh
 python tools/acceptance_test.py --project "C:\path\to\Project"
 ```
 
-It stages cosmetic edits to one small and one large POU, proves the originals are
-byte-identical, and prints what to open and check. A clean Rebuild + Make on both means
-the format is accepted; a failure is equally useful.
+It stages cosmetic edits, proves the originals are byte-identical, and prints what to open
+and check.
 
 ## What the format actually is
 

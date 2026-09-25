@@ -187,6 +187,22 @@ def write_pou_body(
             result.find("write_blocked", blocker, pou.name)
         return None
 
+    # A write that reuses existing sectors has been through the IDE and built clean.
+    # One that had to add FAT sectors changes more of the container, so it is
+    # reported as unverified until that variant has been run the same way.
+    from .validate import (
+        WRITE_VERIFICATION_ACCEPTED,
+        WRITE_VERIFICATION_EVIDENCE,
+        WRITE_VERIFICATION_UNVERIFIED,
+    )
+
+    verification_level = (
+        WRITE_VERIFICATION_UNVERIFIED
+        if plan.fat_growth_sectors
+        else WRITE_VERIFICATION_ACCEPTED
+    )
+    result.note("write_verification_evidence", WRITE_VERIFICATION_EVIDENCE[verification_level])
+
     stage = stage_copy(project, result) if not in_place else _backup_original(project, result)
     target_source = stage.directory / source.relative_to(project.directory)
     # Capture the pre-write hashes now. In an in-place write the stage directory is
@@ -227,11 +243,11 @@ def write_pou_body(
     result.set("container_written", str(target_source))
     result.set("backup", str(stage.backup) if stage.backup else None)
     result.set("written_in_place", in_place)
+    result.set("write_verification", verification_level)
 
     # a POU must still be coherent after the write, not merely readable
     if reopened.find(roles.get("vars", "")) is not None and reopened.find(roles["vars"]).size == 0:
         result.warn("declarations_emptied", f"{pou.name}: the declaration stream is now empty")
-    result.set("write_verification", "unverified")
     return stage
 
 

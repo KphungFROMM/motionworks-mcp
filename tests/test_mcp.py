@@ -164,15 +164,55 @@ def test_a_staged_body_write_leaves_the_project_alone(server: StdioServer, topcu
     staged.with_suffix(".mwt").unlink(missing_ok=True)
 
 
-def test_write_reports_acceptance_steps(server: StdioServer, topcutter: Path) -> None:
+def test_write_records_its_evidence_level(server: StdioServer, topcutter: Path) -> None:
+    """Every write states what is known about IDE acceptance for that shape.
+
+    A write that reuses sectors has been through the IDE; one that grew the FAT has
+    not. Both report a level and the evidence behind it, and neither withholds the
+    attempt.
+    """
     payload = call(
         server,
         "mw_write_pou_body",
         {"project": str(topcutter), "pou": "TopCutterCamSetup", "st": "(* x *)\r\n"},
     )
-    assert payload["meta"]["write_verification"] == "unverified"
+    assert payload["meta"]["write_verification"] in {"accepted", "unverified"}
+    evidence = [
+        warning for warning in payload["warnings"] if warning["code"] == "write_verification_evidence"
+    ]
+    assert evidence, "a write must state the evidence behind its verification level"
     assert any("Rebuild" in step for step in payload["meta"]["acceptance_steps"])
     assert payload["meta"]["open_this"]
+    staged = Path(payload["data"]["project"])
+    shutil.rmtree(staged, ignore_errors=True)
+    staged.with_suffix(".mwt").unlink(missing_ok=True)
+
+
+def test_a_write_that_reuses_sectors_records_acceptance(server: StdioServer, topcutter: Path) -> None:
+    """The observed, IDE-accepted shape is not hedged as unverified."""
+    payload = call(
+        server,
+        "mw_write_pou_body",
+        {"project": str(topcutter), "pou": "TopCutterCamSetup", "st": "(* small *)\r\n"},
+    )
+    assert payload["meta"]["write_plan"]["fat_growth_sectors"] == 0
+    assert payload["meta"]["write_verification"] == "accepted"
+    staged = Path(payload["data"]["project"])
+    shutil.rmtree(staged, ignore_errors=True)
+    staged.with_suffix(".mwt").unlink(missing_ok=True)
+
+
+def test_a_write_that_grows_the_fat_is_not_presumed(server: StdioServer, topcutter: Path) -> None:
+    """An unrun shape is reported as unverified rather than presumed to work."""
+    padding = "\r\n".join(f"(* pad {index:04d} *)" for index in range(9000))
+    payload = call(
+        server,
+        "mw_write_pou_body",
+        {"project": str(topcutter), "pou": "TopCutterCutControl", "st": f"(* big *)\r\n{padding}\r\n"},
+    )
+    assert payload["meta"]["write_plan"]["fat_growth_sectors"] > 0
+    assert payload["meta"]["write_verification"] == "unverified"
+    assert payload["ok"] is True, "an unverified shape is still attempted"
     staged = Path(payload["data"]["project"])
     shutil.rmtree(staged, ignore_errors=True)
     staged.with_suffix(".mwt").unlink(missing_ok=True)

@@ -610,11 +610,12 @@ def write_pou_body(args: dict[str, Any]) -> Result:
         return result
     stage_project_pointer(stage, result)
     result.data = stage.as_dict()
-    result.set("write_verification", "unverified")
+    # The writer sets write_verification from what this write actually had to change;
+    # do not overwrite it here, or the recorded evidence and the level disagree.
     result.set(
         "note",
-        "the container was written and read back byte-identical. Whether MotionWorks IEC "
-        "reopens it is not confirmed until the acceptance steps below have been run",
+        "the container was written and read back byte-identical. Whether this write shape "
+        "has been through MotionWorks IEC is recorded in write_verification",
     )
     return result
 
