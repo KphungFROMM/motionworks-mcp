@@ -189,6 +189,9 @@ def write_pou_body(
 
     stage = stage_copy(project, result) if not in_place else _backup_original(project, result)
     target_source = stage.directory / source.relative_to(project.directory)
+    # Capture the pre-write hashes now. In an in-place write the stage directory is
+    # the project itself, so comparing hashes afterwards would find no difference.
+    before = tree_hashes(project.directory) if in_place else None
 
     writer = CompoundWriter(target_source)
     writer.replace_stream(body_stream, payload)
@@ -204,14 +207,26 @@ def write_pou_body(
             body_stream,
         )
         return None
-    before = tree_hashes(project.directory)
-    after = tree_hashes(stage.directory)
-    changed = [name for name in before if before.get(name) != after.get(name)]
-    changed += [name for name in after if name not in before]
-    stage.files_changed = sorted(changed)
+
+    relative_source = str(source.relative_to(project.directory))
+    if in_place:
+        after = tree_hashes(project.directory)
+        stage.files_changed = sorted(
+            name for name in set(before) | set(after) if before.get(name) != after.get(name)
+        ) or [relative_source]
+    else:
+        original = tree_hashes(project.directory)
+        staged = tree_hashes(stage.directory)
+        stage.files_changed = sorted(
+            name for name in set(original) | set(staged) if original.get(name) != staged.get(name)
+        ) or [relative_source]
+
     result.set("stream_written", body_stream)
     result.set("bytes_written", len(payload))
     result.set("files_changed", stage.files_changed)
+    result.set("container_written", str(target_source))
+    result.set("backup", str(stage.backup) if stage.backup else None)
+    result.set("written_in_place", in_place)
 
     # a POU must still be coherent after the write, not merely readable
     if reopened.find(roles.get("vars", "")) is not None and reopened.find(roles["vars"]).size == 0:
