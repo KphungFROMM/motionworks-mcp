@@ -71,37 +71,56 @@ def test_a_name_without_a_revision_is_not_substituted() -> None:
     assert find_compatible("NoRevisionHere", available) is None
 
 
-def test_retarget_rewrites_the_path_and_keeps_the_member(tmp_path: Path) -> None:
-    """Only the directory moves; the project's record of the library is unchanged."""
-    project = tmp_path / "Proj"
-    project.mkdir()
-    target = tmp_path / "Cam_Toolbox_v374"
-    target.mkdir()
-    listing = project / "@LIBRARY.LST"
-    listing.write_text(
-        "Library List, V40\n"
-        f"USER;{tmp_path / 'Cam_Toolbox_v375'};LIST;0\n",
-        encoding="latin-1",
-    )
-    # point the resolver at this machine's real libraries plus our stand-in
-    available = installed_libraries()
-    available["Cam_Toolbox_v374"] = target
+def test_retarget_rewrites_the_path_and_keeps_the_member(tmp_path: Path, monkeypatch) -> None:
+    """Only the directory moves; the project's record of the library is unchanged.
 
-    result = Result()
+    The available set is injected so the test describes the behaviour rather than
+    whatever happens to be installed on the machine running it.
+    """
     import motionworks_mcp.libraries as libraries_module
 
-    original = libraries_module.installed_libraries
-    libraries_module.installed_libraries = lambda: available
-    try:
-        substitutions = retarget_library_paths(project, result)
-    finally:
-        libraries_module.installed_libraries = original
+    project = tmp_path / "Proj"
+    project.mkdir()
+    stand_in = tmp_path / "Cam_Toolbox_v374"
+    stand_in.mkdir()
+    monkeypatch.setattr(
+        libraries_module, "installed_libraries", lambda: {"Cam_Toolbox_v374": stand_in}
+    )
+
+    listing = project / "@LIBRARY.LST"
+    listing.write_text(
+        f"Library List, V40\nUSER;{tmp_path / 'Cam_Toolbox_v375'};LIST;0\n",
+        encoding="latin-1",
+    )
+
+    result = Result()
+    substitutions = retarget_library_paths(project, result)
 
     assert substitutions == ["Cam_Toolbox_v375 -> Cam_Toolbox_v374"]
     body = listing.read_text(encoding="latin-1")
-    assert str(target) in body
+    assert str(stand_in) in body
     assert body.rstrip().endswith(";LIST;0")
     assert [item.code for item in result.normalisations] == ["library_path_retargeted"]
+
+
+def test_an_exact_match_is_never_rewritten(tmp_path: Path, monkeypatch) -> None:
+    """When the declared revision is installed, the path is left alone."""
+    import motionworks_mcp.libraries as libraries_module
+
+    project = tmp_path / "Proj"
+    project.mkdir()
+    installed = tmp_path / "Cam_Toolbox_v375"
+    installed.mkdir()
+    monkeypatch.setattr(
+        libraries_module, "installed_libraries", lambda: {"Cam_Toolbox_v375": installed}
+    )
+    listing = project / "@LIBRARY.LST"
+    listing.write_text(
+        f"Library List, V40\nUSER;{installed};LIST;0\n", encoding="latin-1"
+    )
+    result = Result()
+    assert retarget_library_paths(project, result) == []
+    assert result.normalisations == []
 
 
 def test_retarget_leaves_an_already_valid_path_alone(tmp_path: Path) -> None:

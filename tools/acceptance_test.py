@@ -79,12 +79,15 @@ def stage(project_path: Path, pou_names: list[str], out_dir: Path | None) -> int
     if baseline_subs:
         print(f"library paths retargeted in BOTH copies: {', '.join(baseline_subs)}")
         print( "   (the project was saved against a toolbox revision this machine does not")
-        print( "    have; only the path changes, and the library's own name is untouched)")
+        print( "    have, so the baseline is byte-identical apart from those paths)")
+    else:
+        print( "library paths: every declared library resolves on this machine, no edits made")
     print(f"\nSTEP 1 - establish the baseline (do this first)")
     print(f"   open: {baseline_dir.with_suffix('.mwt')}")
     print( "   Rebuild Project (Ctrl+F9), then Make (F9)")
-    print( "   this copy is the project with only those library paths changed; if IT fails")
-    print( "   to build, note the error and stop - the test cannot attribute a failure")
+    print( "   this copy is the project unchanged; if IT fails to build, note the error and")
+    print( "   stop - the test cannot attribute a failure to the write if the input already")
+    print( "   fails")
     print(f"\nSTEP 2 - the staged write\n")
 
     staged_dirs: list[Path] = []
