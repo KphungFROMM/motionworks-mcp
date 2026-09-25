@@ -54,7 +54,7 @@ working directory.
 | `mw_get_globals` | global declarations, the address map, and symbol comments |
 | `mw_get_tasks` | task type, cycle interval, priority, watchdog |
 | `mw_get_hardware` | controller, firmware, axes, EtherNet/IP instances, drive parameters |
-| `mw_get_library_deps` | declared libraries, marked present or missing on this machine |
+| `mw_get_library_deps` | each declared library as **resolved**, **different revision**, or **missing** — and for a revision mismatch, the installed path it can be retargeted to |
 | `mw_get_data_types` | the imported data-type list |
 | `mw_search` | declarations, bodies and compiled logic across a project |
 
@@ -77,6 +77,28 @@ working directory.
 POU spans the project tree, `LIST.POU`, the POU folder, translation documents and four
 internal stream names, and a partial application would leave a project the IDE cannot
 open.
+
+## Library paths move with the project, and that breaks builds
+
+`@LIBRARY.LST` records each dependency as an **absolute path** that embeds the toolbox
+revision:
+
+```
+USER;C:\Users\Public\Documents\MotionWorks IEC 3 Pro\Libraries\Cam_Toolbox_v375;LIST;0
+```
+
+Open that project on a machine whose toolbox collection installed `Cam_Toolbox_v374`, and
+the IDE reports a missing library although everything the library defines is present. This
+is a routine way to lose an afternoon, and it is not a defect in either project.
+
+`mw_get_library_deps` reports the distinction — `resolved`, `different_revision`,
+`missing` — and names the installed revision a stale path can be pointed at. Only the
+directory is ever substituted: the third field, the library's membership name, is left
+exactly as the project wrote it, and every substitution is reported as a normalisation.
+A different revision can change behaviour, so it is surfaced, never assumed.
+
+The acceptance probe applies this when it stages a copy, so a build failure in the test
+means the format, not a stale path.
 
 ## Writing project files
 

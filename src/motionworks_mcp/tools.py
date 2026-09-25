@@ -365,18 +365,25 @@ def get_hardware(args: dict[str, Any]) -> Result:
 
 
 def get_library_deps(args: dict[str, Any]) -> Result:
-    """Library and firmware dependencies, marked present or missing locally."""
+    """Library dependencies, each reported as resolved, a different revision, or missing.
+
+    A project moved between machines asks for the revision it was last saved
+    against. Where another revision of the same library is installed, that is
+    reported with the path it can be retargeted to.
+    """
+    from .libraries import resolve_libraries
+
     project = _project(args)
     result = project.result
-    libraries = project.library_list()
-    missing = [entry["name"] for entry in libraries if entry["installed"] == "false"]
-    if missing:
+    rows = resolve_libraries(project.directory, result)
+    unresolved = [row["folder"] for row in rows if row["status"] == "missing"]
+    if unresolved:
         result.note(
             "libraries_not_installed",
-            f"{len(missing)} declared library path(s) are not installed on this machine: "
-            + ", ".join(missing[:6]),
+            f"{len(unresolved)} declared library path(s) are not installed on this machine "
+            "and no other revision is present: " + ", ".join(str(name) for name in unresolved[:6]),
         )
-    result.data = libraries
+    result.data = rows
     return result
 
 

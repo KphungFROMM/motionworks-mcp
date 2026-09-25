@@ -29,6 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from motionworks_mcp.envelope import Result  # noqa: E402
+from motionworks_mcp.libraries import retarget_library_paths  # noqa: E402
 from motionworks_mcp.pou import body_text  # noqa: E402
 from motionworks_mcp.project import Project  # noqa: E402
 from motionworks_mcp.write import (  # noqa: E402
@@ -58,23 +59,32 @@ def stage(project_path: Path, pou_names: list[str], out_dir: Path | None) -> int
     result = Result()
     baseline = tree_hashes(project.directory)
 
-    # A baseline copy that is byte-for-byte the project, so a build failure can be
-    # attributed. Without it, "the project needed a library we do not have" and
+    # A baseline copy that differs from the project only in ways this probe would
+    # have to change anyway — library paths — so a build result can be attributed.
+    # Without it, "the machine lacks the toolbox revision this project names" and
     # "our write broke the container" look identical in the IDE.
     baseline_dir = project.directory.parent / f"{project.directory.name}__baseline"
-    if not baseline_dir.exists():
-        shutil.copytree(project.directory, baseline_dir)
-        mwt = project.directory.with_suffix(".mwt")
-        if mwt.is_file():
-            shutil.copy2(mwt, baseline_dir.with_suffix(".mwt"))
+    if baseline_dir.exists():
+        shutil.rmtree(baseline_dir, ignore_errors=True)
+        baseline_dir.with_suffix(".mwt").unlink(missing_ok=True)
+    shutil.copytree(project.directory, baseline_dir)
+    baseline_mwt = project.directory.with_suffix(".mwt")
+    if baseline_mwt.is_file():
+        shutil.copy2(baseline_mwt, baseline_dir.with_suffix(".mwt"))
+    baseline_result = Result()
+    baseline_subs = retarget_library_paths(baseline_dir, baseline_result)
 
     print(f"project      : {project.directory}")
     print(f"targets      : {', '.join(pou_names)}")
+    if baseline_subs:
+        print(f"library paths retargeted in BOTH copies: {', '.join(baseline_subs)}")
+        print( "   (the project was saved against a toolbox revision this machine does not")
+        print( "    have; only the path changes, and the library's own name is untouched)")
     print(f"\nSTEP 1 - establish the baseline (do this first)")
     print(f"   open: {baseline_dir.with_suffix('.mwt')}")
     print( "   Rebuild Project (Ctrl+F9), then Make (F9)")
-    print( "   this copy is byte-identical to the project; if IT fails to build, note the")
-    print( "   error and stop - the test cannot distinguish format from missing libraries")
+    print( "   this copy is the project with only those library paths changed; if IT fails")
+    print( "   to build, note the error and stop - the test cannot attribute a failure")
     print(f"\nSTEP 2 - the staged write\n")
 
     staged_dirs: list[Path] = []
@@ -97,6 +107,16 @@ def stage(project_path: Path, pou_names: list[str], out_dir: Path | None) -> int
             continue
         stage_project_pointer(stage_obj, copy_result)
         staged_dirs.append(stage_obj.directory)
+
+        # A staged copy is the right place to fix machine-specific library paths:
+        # this project was saved against Cam_Toolbox_v375 and this machine has
+        # v374. Left alone, the IDE would report a missing library and the build
+        # result would say nothing about whether our container write is good.
+        library_result = Result()
+        substitutions = retarget_library_paths(stage_obj.directory, library_result)
+        if substitutions:
+            print(f"      library paths retargeted: {', '.join(substitutions)}")
+
         plan = copy_result.meta.get("write_plan", {})
         stream = (plan.get("streams") or [{}])[0]
         print(
