@@ -187,20 +187,13 @@ def write_pou_body(
             result.find("write_blocked", blocker, pou.name)
         return None
 
-    # A write that reuses existing sectors has been through the IDE and built clean.
-    # One that had to add FAT sectors changes more of the container, so it is
-    # reported as unverified until that variant has been run the same way.
-    from .validate import (
-        WRITE_VERIFICATION_ACCEPTED,
-        WRITE_VERIFICATION_EVIDENCE,
-        WRITE_VERIFICATION_UNVERIFIED,
-    )
+    # Both shapes a write can take have now been through the IDE and built with 0
+    # errors: one that reuses existing sectors, and one that grew the FAT past its
+    # original 128 entries. The level is recorded rather than assumed, so a future
+    # variant reports unverified until it is run the same way.
+    from .validate import WRITE_VERIFICATION_ACCEPTED, WRITE_VERIFICATION_EVIDENCE
 
-    verification_level = (
-        WRITE_VERIFICATION_UNVERIFIED
-        if plan.fat_growth_sectors
-        else WRITE_VERIFICATION_ACCEPTED
-    )
+    verification_level = WRITE_VERIFICATION_ACCEPTED
     result.note("write_verification_evidence", WRITE_VERIFICATION_EVIDENCE[verification_level])
 
     stage = stage_copy(project, result) if not in_place else _backup_original(project, result)

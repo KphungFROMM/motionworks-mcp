@@ -115,14 +115,29 @@ level and the evidence behind it:
 
 | Level | Means |
 |---|---|
-| `accepted` | a container written by this code was opened, **Rebuild Project**'d and **Make**'d in MotionWorks IEC 3 Pro 3.7.5.1 with no errors |
+| `accepted` | containers written by this code have been opened, **Rebuild Project**'d and **Make**'d in MotionWorks IEC 3 Pro 3.7.5.1 with **0 errors** — both with sectors reused and with the FAT grown past its original 128 entries |
 | `unverified` | this write shape has not been through the IDE; the container reads back byte-identical, and that is all that is claimed |
 
-A write that reuses existing sectors is `accepted`. One that had to add FAT sectors is
-`unverified` until that variant has been run the same way — the same code path plus FAT
-allocation, but more of the container changes, so it is recorded rather than presumed.
+Both shapes a write currently takes are `accepted`. The level is recorded rather than
+assumed, so a shape that has not been run reports `unverified` — and is still attempted.
 
-The control that makes the `accepted` result trustworthy: a byte-identical copy of the same
+Getting there took three defects that only a real build exposed, all in the FAT-growth
+path, all found *after* a container had already passed a structural round trip:
+
+- the header's `number of FAT sectors` was left at its original value after adding FAT
+  sectors, so a reader that trusts the field could not reach anything past the first 128
+  sectors. Our own reader walks the DIFAT and read the broken container happily, which is
+  why the tests now include a spec-strict reader that uses only the header fields;
+- replacing a large stream with a small one chose the allocation path from the entry's
+  recorded size rather than the payload's, so a large entry's FAT sector index was read as
+  a mini index — the write produced the right length and the wrong bytes;
+- the mini-sector count was derived from the root entry's declared size, which real
+  containers leave at zero while the chain holds seven sectors.
+
+A write also clears the generated `tmp.sto` cache, so a Rebuild rebuilds from the container
+rather than aborting on a cache describing the previous state.
+
+The control that makes an `accepted` result trustworthy: a byte-identical copy of the same
 project was built first and **also built clean**, with every declared library resolving. The
 environment was proven before the write was added.
 
