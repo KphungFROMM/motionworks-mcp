@@ -512,6 +512,57 @@ def pou_impact(args: dict[str, Any]) -> Result:
     return result
 
 
+def validate_container_tool(args: dict[str, Any]) -> Result:
+    """Check a compound file against the format, and against itself.
+
+    Reads the container the way another implementation would — through the header's
+    declared counts, not by walking the DIFAT — and checks that the parts agree:
+    every stream's chain is long enough for the size it claims, no two allocations
+    overlap, and no sector is allocated but unreachable.
+
+    This is the check that a structural round trip cannot make. A container whose
+    header declares one FAT sector while the DIFAT names three reads back perfectly
+    through a reader that follows the DIFAT, and fails in every other reader,
+    MotionWorks included.
+    """
+    from .structural import validate_container
+
+    result = Result()
+    target = args.get("path") or args.get("project")
+    if not target:
+        raise ValueError("'path' is required: a .st1, .sto or .mwt file, or a project directory")
+    path = Path(str(target))
+    if path.is_dir():
+        candidates = sorted(path.rglob("*.st1")) + sorted(path.rglob("*.sto"))
+    elif path.is_file():
+        candidates = [path]
+    else:
+        raise FileNotFoundError(f"path does not exist: {path}")
+    if not candidates:
+        result.warn("no_containers", f"no compound files found under {path}")
+        result.data = []
+        return result
+
+    reports = []
+    for candidate in candidates:
+        report = validate_container(candidate)
+        entry = report.as_dict()
+        entry["relative"] = str(candidate.relative_to(path)) if path.is_dir() else candidate.name
+        reports.append(entry)
+        for finding in report.findings:
+            result.find("container_not_sound", f"{entry['relative']}: {finding}", entry["relative"])
+        for warning in report.warnings:
+            result.warn("container_warning", f"{entry['relative']}: {warning}", entry["relative"])
+
+    result.data = reports
+    result.set("checked", len(reports))
+    result.set(
+        "clean",
+        sum(1 for report in reports if report["ok"] and not report["warnings"]),
+    )
+    return result
+
+
 def require(args: dict[str, Any], key: str) -> str:
     """Read a required string argument."""
     value = args.get(key)
@@ -822,6 +873,32 @@ TOOLS: dict[str, tuple[Callable[[dict[str, Any]], Result], dict[str, Any]]] = {
             "required": ["project", "target"],
             "additionalProperties": False,
             "description": "Callers and callees of a POU or symbol, from declarations and compiled logic.",
+        },
+    ),
+    "mw_validate_container": (
+        validate_container_tool,
+        {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "A .st1, .sto or .mwt file, or a project directory to check every "
+                        "container under."
+                    ),
+                },
+                "project": {
+                    "type": "string",
+                    "description": "Alias for path, so a project directory can be passed directly.",
+                },
+            },
+            "additionalProperties": False,
+            "description": (
+                "Check compound files against the format and against themselves: header counts "
+                "versus chains, stream chain length versus declared size, overlapping or "
+                "unreachable sectors. Finds the class of defect that a structural round trip "
+                "cannot, because this reads the container the way other implementations do."
+            ),
         },
     ),
     "mw_plan_write": (
